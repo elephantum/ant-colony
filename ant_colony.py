@@ -1,10 +1,12 @@
-from numpy.random import randint
-import pygame as pg
-from pygame import gfxdraw
+from typing import Tuple, Any, Optional
+from numpy.random import randint, random
 import numpy as np
 import math
 import skimage.draw
 
+import pygame as pg
+from pygame import gfxdraw
+from pygame.math import Vector2
 
 N_SCENTS = 2
 IDX_SCENT_TO_HOME = 0
@@ -16,7 +18,7 @@ SCENT_DECAY = 0.995
 ANT_VELOCITY = 1.
 ANT_ROTATION_VEL = 60
 FOOD_DETECTION_RAD = 20
-DETECTION_DISTANCE = 20
+DETECTION_DISTANCE = 20.
 
 
 STATE_SEARCHING_FOOD = 'search_food'
@@ -27,33 +29,33 @@ FOOD_SIZE = 50
 N_FOODS = 20
 
 
-WORLD_W = 500
-WORLD_H = 500
-
-
-def distance(x1, y1, x2, y2):
-    return math.sqrt((x1 - x2)**2 + (y1 - y2) ** 2)
+WORLD_SIZE = Vector2(500, 500)
 
 
 class Ant:
-    def __init__(self, x, y, dir):
-        self.x = x
-        self.y = y
-        self.dir = dir
+    def __init__(self, position: Vector2, velocity: Vector2):
+        self.position = position
+        self.velocity = velocity
+
         self.state = STATE_SEARCHING_FOOD
         self.state_age = 0
     
-    def sniff(self, world):
+    def sniff(self, world: 'World') -> Tuple[Any, Any]:
+        center_dir = self.position + (self.velocity * DETECTION_DISTANCE)
+        left_dir = self.position + (self.velocity.rotate(-60) * DETECTION_DISTANCE)
+        right_dir = self.position + (self.velocity.rotate(60) * DETECTION_DISTANCE)
+
+
         left_mask = skimage.draw.polygon(
-            [int(self.x), int(self.x + math.cos(self.dir / 360. * 2. * math.pi)*DETECTION_DISTANCE), int(self.x + math.cos((self.dir - 90) / 360. * 2. * math.pi)*DETECTION_DISTANCE)],
-            [int(self.y), int(self.y + math.sin(self.dir / 360. * 2. * math.pi)*DETECTION_DISTANCE), int(self.y + math.sin((self.dir - 90) / 360. * 2. * math.pi)*DETECTION_DISTANCE)],
-            (world.w, world.h)
+            [int(self.position.x), int(center_dir.x), int(left_dir.x)],
+            [int(self.position.y), int(center_dir.y), int(left_dir.y)],
+            (int(world.size.x), int(world.size.y))
         )
 
         right_mask = skimage.draw.polygon(
-            [int(self.x), int(self.x + math.cos(self.dir / 360. * 2. * math.pi)*DETECTION_DISTANCE), int(self.x + math.cos((self.dir + 90) / 360. * 2. * math.pi)*DETECTION_DISTANCE)],
-            [int(self.y), int(self.y + math.sin(self.dir / 360. * 2. * math.pi)*DETECTION_DISTANCE), int(self.y + math.sin((self.dir + 90) / 360. * 2. * math.pi)*DETECTION_DISTANCE)],
-            (world.w, world.h)
+            [int(self.position.x), int(center_dir.x), int(right_dir.x)],
+            [int(self.position.y), int(center_dir.y), int(right_dir.y)],
+            (int(world.size.x), int(world.size.y))
         )
 
         left = world.scents[left_mask[0], left_mask[1], :].sum(0)
@@ -64,8 +66,8 @@ class Ant:
     def tick(self, world: 'World') -> None:
         self.state_age += 1
 
-        is_home = world.is_home(self.x, self.y)
-        food = world.get_food(self.x, self.y)
+        is_home = world.is_home(self.position)
+        food = world.get_food(self.position)
 
         if self.state == STATE_SEARCHING_FOOD:
             if is_home:
@@ -74,7 +76,8 @@ class Ant:
             if food is not None:
                 food.size -= 1
                 self.state=STATE_GOING_HOME
-                self.dir += 180
+
+                self.velocity = self.velocity.rotate(180)
                 self.state_age = 0
 
         elif self.state == STATE_GOING_HOME:
@@ -83,17 +86,17 @@ class Ant:
 
             if is_home:
                 self.state = STATE_SEARCHING_FOOD
-                self.dir += 180
+                self.velocity = self.velocity.rotate(180)
                 self.state_age = 0
 
 
         if self.state == STATE_SEARCHING_FOOD:
             if self.state_age < 1000:
-                world.scents[int(self.x), int(self.y), IDX_SCENT_TO_HOME] += 1
+                world.leave_scent(self.position, IDX_SCENT_TO_HOME)
             sniff_for = IDX_SCENT_TO_FOOD
         elif self.state == STATE_GOING_HOME:
             if self.state_age < 1000:
-                world.scents[int(self.x), int(self.y), IDX_SCENT_TO_FOOD] += 1
+                world.leave_scent(self.position, IDX_SCENT_TO_FOOD)
             sniff_for = IDX_SCENT_TO_HOME
 
 
@@ -101,45 +104,41 @@ class Ant:
         l = l[sniff_for]
         r = r[sniff_for]
 
-        self.dir += (randint(-ANT_ROTATION_VEL, 0) * (l+1) + randint(0, ANT_ROTATION_VEL) * (r+1)) / (l+r+2)
-        self.dir %= 360
+        self.velocity.rotate_ip((randint(-ANT_ROTATION_VEL, 0) * (l+1) + randint(0, ANT_ROTATION_VEL) * (r+1)) / (l+r+2))
 
 
-        self.x += ANT_VELOCITY * math.cos(self.dir / 360. * 2. * math.pi)
-        self.y += ANT_VELOCITY * math.sin(self.dir / 360. * 2. * math.pi)
+        self.position += self.velocity
 
-        self.x = min(max(0, self.x), world.w-1)
-        self.y = min(max(0, self.y), world.h-1)
+        self.position.x = min(max(0, self.position.x), world.size.x - 1)
+        self.position.y = min(max(0, self.position.y), world.size.y - 1)
 
 
 class Food:
-    def __init__(self, x, y, size):
-        self.x = x
-        self.y = y
+    def __init__(self, position, size):
+        self.position = position
         self.size = size
 
 
 class World:
-    def __init__(self, w, h, n_ants, n_foods) -> None:
-        self.w = w
-        self.h = h
+    def __init__(self, size: Vector2, n_ants, n_foods) -> None:
+        self.size = size
 
-        self.home_xy = (randint(0, w), randint(0, h))
+        self.home_pos = size.elementwise() * Vector2(random(), random())
 
         self.foods = [
-            Food(randint(0, w), randint(0, h), FOOD_SIZE)
+            Food(size.elementwise() * Vector2(random(), random()), FOOD_SIZE)
             for i in range(n_foods)
         ]
 
         self.ants = [
-            Ant(self.home_xy[0], self.home_xy[1], randint(0, 360))
+            Ant(Vector2(self.home_pos), Vector2(1,0).rotate(randint(0, 360)))
             for i in range(n_ants)
         ]
 
-        self.scents = np.zeros((w, h, N_SCENTS))
+        self.scents = np.zeros((int(size.x), int(size.y), N_SCENTS))
 
-    def draw(self):
-        scents_arr = np.zeros((self.w, self.h, 3))
+    def draw(self) -> Any:
+        scents_arr = np.zeros((int(self.size.x), int(self.size.y), 3))
         scents_arr += self.scents[:,:,[IDX_SCENT_TO_HOME]] * np.array([0, 200, 0])
         scents_arr += self.scents[:,:,[IDX_SCENT_TO_FOOD]] * np.array([0, 0, 200])
 
@@ -152,43 +151,47 @@ class World:
 
         surface = pg.surfarray.make_surface(scents_arr)
 
-        gfxdraw.filled_circle(surface, self.home_xy[0], self.home_xy[1], 10, pg.Color(0, 0, 0))
-        gfxdraw.filled_circle(surface, self.home_xy[0], self.home_xy[1], 8, pg.Color(0, 200, 0))
+        gfxdraw.filled_circle(surface, int(self.home_pos.x), int(self.home_pos.y), 10, pg.Color(0, 0, 0))
+        gfxdraw.filled_circle(surface, int(self.home_pos.x), int(self.home_pos.y), 8, pg.Color(0, 200, 0))
 
         for food in self.foods:
-            gfxdraw.filled_circle(surface, food.x, food.y, int(food.size / 10), pg.Color(0, 0, 200))
+            gfxdraw.filled_circle(surface, int(food.position.x), int(food.position.y), int(food.size / 10), pg.Color(0, 0, 200))
             # gfxdraw.filled_circle(surface, food.x, food.y, 4, pg.Color(0, 0, 200))
 
         for ant in self.ants:
-            gfxdraw.filled_circle(surface, int(ant.x), int(ant.y), 5, pg.Color(0, 0, 0))
-            gfxdraw.filled_circle(surface, int(ant.x), int(ant.y), 4, pg.Color(200, 0, 0))
+            gfxdraw.filled_circle(surface, int(ant.position.x), int(ant.position.y), 5, pg.Color(0, 0, 0))
+            gfxdraw.filled_circle(surface, int(ant.position.x), int(ant.position.y), 4, pg.Color(200, 0, 0))
 
         return surface
 
-    def get_food(self, x, y):
+    def get_food(self, pos: Vector2) -> Optional[Food]:
         for food in self.foods:
-            if distance(x, y, food.x, food.y) < FOOD_DETECTION_RAD and food.size > 0:
+            if pos.distance_to(food.position) < FOOD_DETECTION_RAD and food.size > 0:
                 return food
+        return None
 
-    def is_home(self, x, y):
-        if distance(x, y, self.home_xy[0], self.home_xy[1]) < FOOD_DETECTION_RAD:
+    def is_home(self, pos: Vector2) -> bool:
+        if pos.distance_to(self.home_pos) < FOOD_DETECTION_RAD:
             return True
         else:
             return False
 
-    def tick(self):
+    def tick(self) -> None:
         self.scents *= SCENT_DECAY
 
         for ant in self.ants:
             ant.tick(self)
 
+    def leave_scent(self, position, scent) -> None:
+        self.scents[int(position.x), int(position.y), scent] += 1
 
-def main():
-    world = World(WORLD_W, WORLD_H, 100, N_FOODS)
+
+def main() -> None:
+    world = World(WORLD_SIZE, 100, N_FOODS)
 
 
     pg.init()
-    screen = pg.display.set_mode((WORLD_W, WORLD_H))
+    screen = pg.display.set_mode((int(WORLD_SIZE.x), int(WORLD_SIZE.y)))
     clock = pg.time.Clock()
 
     running = True

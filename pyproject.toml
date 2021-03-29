@@ -5,10 +5,11 @@ description = ""
 authors = ["Andrey Tatarinov <a@tatarinov.co>"]
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = "^3.8,<3.10"
 pygame = "^2.0.1"
 esper = "^1.3"
 scikit-image = "^0.18.1"
+scipy = "^1.6.2"
 
 [tool.poetry.dev-dependencies]
 
