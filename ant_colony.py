@@ -3,6 +3,7 @@ from numpy.random import randint, random
 import numpy as np
 import math
 import skimage.draw
+from scipy.signal import convolve2d
 
 import pygame as pg
 from pygame import gfxdraw
@@ -17,8 +18,8 @@ SCENT_DECAY = 0.995
 
 ANT_VELOCITY = 1.
 ANT_ROTATION_VEL = 60
-FOOD_DETECTION_RAD = 20
-DETECTION_DISTANCE = 20.
+CONTACT_DISTANCE = 20
+SNIFF_DISTANCE = 30.
 
 
 STATE_SEARCHING_FOOD = 'search_food'
@@ -41,9 +42,9 @@ class Ant:
         self.state_age = 0
     
     def sniff(self, world: 'World') -> Tuple[Any, Any]:
-        center_dir = self.position + (self.velocity * DETECTION_DISTANCE)
-        left_dir = self.position + (self.velocity.rotate(-60) * DETECTION_DISTANCE)
-        right_dir = self.position + (self.velocity.rotate(60) * DETECTION_DISTANCE)
+        center_dir = self.position + (self.velocity * SNIFF_DISTANCE)
+        left_dir = self.position + (self.velocity.rotate(-60) * SNIFF_DISTANCE)
+        right_dir = self.position + (self.velocity.rotate(60) * SNIFF_DISTANCE)
 
 
         left_mask = skimage.draw.polygon(
@@ -104,8 +105,7 @@ class Ant:
         l = l[sniff_for]
         r = r[sniff_for]
 
-        self.velocity.rotate_ip((randint(-ANT_ROTATION_VEL, 0) * (l+1) + randint(0, ANT_ROTATION_VEL) * (r+1)) / (l+r+2))
-
+        self.velocity.rotate_ip((randint(-ANT_ROTATION_VEL, 0) * (l+1) + randint(0, ANT_ROTATION_VEL) * (r+1)) / (l+r+2) + randint(-ANT_ROTATION_VEL/4, ANT_ROTATION_VEL/4))
 
         self.position += self.velocity
 
@@ -166,18 +166,24 @@ class World:
 
     def get_food(self, pos: Vector2) -> Optional[Food]:
         for food in self.foods:
-            if pos.distance_to(food.position) < FOOD_DETECTION_RAD and food.size > 0:
+            if pos.distance_to(food.position) < CONTACT_DISTANCE and food.size > 0:
                 return food
         return None
 
     def is_home(self, pos: Vector2) -> bool:
-        if pos.distance_to(self.home_pos) < FOOD_DETECTION_RAD:
+        if pos.distance_to(self.home_pos) < CONTACT_DISTANCE:
             return True
         else:
             return False
 
     def tick(self) -> None:
-        self.scents *= SCENT_DECAY
+        decay_mat = np.array([
+            [0.00, 0.0005,  0.00,],
+            [0.0005,  0.992,  0.0005   ],
+            [0.00, 0.0005,  0.00,]
+        ])
+        self.scents[:,:, IDX_SCENT_TO_FOOD] = convolve2d(self.scents[:,:, IDX_SCENT_TO_FOOD], decay_mat, mode='same')
+        self.scents[:,:, IDX_SCENT_TO_HOME] = convolve2d(self.scents[:,:, IDX_SCENT_TO_HOME], decay_mat, mode='same')
 
         for ant in self.ants:
             ant.tick(self)
