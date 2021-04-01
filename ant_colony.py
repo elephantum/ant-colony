@@ -86,25 +86,53 @@ class MovementProcessor(esper.Processor):
 
 
 class FoodProcessor(esper.Processor):
+    def __init__(self, world_size) -> None:
+        super().__init__()
+
+        self.world_size = world_size
+
+        self.recache = True
+        self.ents = np.zeros((int(world_size.x), int(world_size.y)), dtype=int)
+        self.ents[:,:] = -1
+
+    def cache(self):
+        if self.recache:
+            self.ents[:,:] = -1
+
+            for ent, (food, mov) in self.world.get_components(Food, Movable):
+                cooords = skimage.draw.circle(int(mov.position.x), int(mov.position.y), CONTACT_DISTANCE, (int(self.world_size.x), int(self.world_size.y)))
+
+                self.ents[cooords[0], cooords[1]] = ent
+            
+            self.recache = False
+
+    def get_food(self, pos: Vector2) -> Optional[Food]:
+        self.cache()
+
+        ent = self.ents[int(pos.x), int(pos.y)]
+
+        if ent != -1:
+            return self.world.component_for_entity(ent, Food)
+        
+        return None
+
     def process(self):
+        self.cache()
+
         for ent, (food, ren, stinky) in self.world.get_components(Food, Renderable, Stinky):
             if food.size > 0:
                 stinky.size = int(food.size / 10)
                 ren.size = int(food.size / 10)
             else:
                 self.world.delete_entity(ent)
+                self.recache = True
 
 
 class AntProcessor(esper.Processor):
-    def __init__(self, scent_processor) -> None:
+    def __init__(self, food_processor, scent_processor) -> None:
         super().__init__()
+        self.food_processor = food_processor
         self.scent_processor = scent_processor
-
-    def get_food(self, pos: Vector2) -> Optional[Food]:
-        for ent, (food, mov) in self.world.get_components(Food, Movable):
-            if pos.distance_to(mov.position) < CONTACT_DISTANCE and food.size > 0:
-                return food
-        return None
 
     def is_home(self, pos: Vector2) -> bool:
         for ent, (home, mov) in self.world.get_components(Home, Movable):
@@ -147,7 +175,7 @@ class AntProcessor(esper.Processor):
             else:
                 stinky.scent = None
 
-            food = self.get_food(mov.position)
+            food = self.food_processor.get_food(mov.position)
             is_home = self.is_home(mov.position)
 
             if ant.state == STATE_SEARCHING_FOOD:
@@ -275,8 +303,8 @@ def main() -> None:
         world.add_component(ant, Renderable(3, pg.Color(200, 0, 0)))
 
     scent_processor = ScentProcessor(WORLD_SIZE)
-    food_processor = FoodProcessor()
-    ant_processor = AntProcessor(scent_processor)
+    food_processor = FoodProcessor(WORLD_SIZE)
+    ant_processor = AntProcessor(food_processor, scent_processor)
     movement_processor = MovementProcessor(WORLD_SIZE)
     render_processor = RenderProcessor(WORLD_SIZE, screen, scent_processor)
 
