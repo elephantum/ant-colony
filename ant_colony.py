@@ -1,10 +1,8 @@
-from typing import Tuple, Any, Optional
+from typing import Tuple, Any, Optional, List
 from numpy.random import randint, random
 import numpy as np
-import math
-from pygame.transform import rotate
-from pygame.version import ver
 import skimage.draw
+import skimage.transform
 from scipy.signal import convolve2d
 
 import esper
@@ -140,26 +138,21 @@ class AntProcessor(esper.Processor):
                 return True
         return False
 
-    def sniff(self, mov: Movable) -> Tuple[Any, Any]:
+    def sniff(self, mov: Movable, scent: int) -> Tuple[Any, Any]:
         center_dir = mov.position + (mov.velocity * SNIFF_DISTANCE)
         left_dir = mov.position + (mov.velocity.rotate(-60) * SNIFF_DISTANCE)
         right_dir = mov.position + (mov.velocity.rotate(60) * SNIFF_DISTANCE)
 
 
-        left_mask = skimage.draw.polygon(
-            [int(mov.position.x), int(center_dir.x), int(left_dir.x)],
-            [int(mov.position.y), int(center_dir.y), int(left_dir.y)],
-            (int(self.scent_processor.world_size.x), int(self.scent_processor.world_size.y))
+        left = self.scent_processor.sniff(
+            [mov.position, center_dir, left_dir],
+            scent
         )
 
-        right_mask = skimage.draw.polygon(
-            [int(mov.position.x), int(center_dir.x), int(right_dir.x)],
-            [int(mov.position.y), int(center_dir.y), int(right_dir.y)],
-            (int(self.scent_processor.world_size.x), int(self.scent_processor.world_size.y))
+        right = self.scent_processor.sniff(
+            [mov.position, center_dir, right_dir],
+            scent
         )
-
-        left = self.scent_processor.scents[left_mask[0], left_mask[1], :].sum(0)
-        right = self.scent_processor.scents[right_mask[0], right_mask[1], :].sum(0)
 
         return left, right
 
@@ -205,35 +198,50 @@ class AntProcessor(esper.Processor):
                 sniff_for = SCENT_TO_HOME
 
 
-            l, r = self.sniff(mov)
-            l = l[sniff_for]
-            r = r[sniff_for]
+            l, r = self.sniff(mov, sniff_for)
 
             mov.velocity.rotate_ip((randint(-ANT_ROTATION_VEL, 0) * (l+1) + randint(0, ANT_ROTATION_VEL) * (r+1)) / (l+r+2))
             mov.velocity.rotate_ip(randint(-ANT_ROTATION_VEL/4, ANT_ROTATION_VEL/4))
 
 
 class ScentProcessor(esper.Processor):
-    def __init__(self, world_size) -> None:
+    def __init__(self, world_size, k=1) -> None:
         super().__init__()
 
+        self.k = k
+
         self.world_size = world_size
-        self.scents = np.zeros((int(world_size.x), int(world_size.y), N_SCENTS))
+        self.scents = np.zeros((int(world_size.x / self.k), int(world_size.y / self.k), N_SCENTS))
+
+        d = 0.001 / (k*k)
+        self.diff_kernel = np.array([
+            [0.00, d,  0.00,],
+            [d,  0.992,  d   ],
+            [0.00, d,  0.00,]
+        ])
 
     def leave_scent(self, position, size, scent) -> None:
-        cooords = skimage.draw.circle(int(position.x), int(position.y), size, (int(self.world_size.x), int(self.world_size.y)))
+        cooords = skimage.draw.circle(int(position.x / self.k), int(position.y / self.k), size / self.k, (int(self.world_size.x / self.k), int(self.world_size.y / self.k)))
 
-        # self.scents[int(position.x), int(position.y), scent] += 1
         self.scents[cooords[0], cooords[1], scent] = 1
     
+    def sniff(self, polygon: List[Vector2], scent: int) -> float:
+        mask = skimage.draw.polygon(
+            [int(i.x / self.k) for i in polygon],
+            [int(i.y / self.k) for i in polygon],
+            (int(self.world_size.x / self.k), int(self.world_size.y / self.k))
+        )
+
+        scent_val = self.scents[mask[0], mask[1], scent].sum()
+
+        return scent_val
+
+    def scents_for_vis(self):
+        return skimage.transform.resize(self.scents, (int(self.world_size.x), int(self.world_size.y), N_SCENTS))
+
     def process(self):
-        decay_mat = np.array([
-            [0.00, 0.001,  0.00,],
-            [0.001,  0.992,  0.001   ],
-            [0.00, 0.001,  0.00,]
-        ])
-        self.scents[:,:, SCENT_TO_FOOD] = convolve2d(self.scents[:,:, SCENT_TO_FOOD], decay_mat, mode='same')
-        self.scents[:,:, SCENT_TO_HOME] = convolve2d(self.scents[:,:, SCENT_TO_HOME], decay_mat, mode='same')
+        self.scents[:,:, SCENT_TO_FOOD] = convolve2d(self.scents[:,:, SCENT_TO_FOOD], self.diff_kernel, mode='same')
+        self.scents[:,:, SCENT_TO_HOME] = convolve2d(self.scents[:,:, SCENT_TO_HOME], self.diff_kernel, mode='same')
 
         for ent, (mov, stinky) in self.world.get_components(Movable, Stinky):
             if stinky.scent is not None:
@@ -250,15 +258,11 @@ class RenderProcessor(esper.Processor):
         self.scent_processor = scent_processor
 
     def process(self):
+        scents = self.scent_processor.scents_for_vis()
+
         scents_arr = np.zeros((int(self.world_size.x), int(self.world_size.y), 3))
-        scents_arr += self.scent_processor.scents[:,:,[SCENT_TO_HOME]] * np.array([0, 200, 0])
-        scents_arr += self.scent_processor.scents[:,:,[SCENT_TO_FOOD]] * np.array([0, 0, 200])
-
-
-        # for ant in self.ants:
-        #     l, r = ant.sniff(self)
-        #     scents_arr[l[0], l[1], :] += np.array([80, 0, 0])
-        #     scents_arr[r[0], r[1], :] += np.array([120, 0, 0])
+        scents_arr += scents[:,:,[SCENT_TO_HOME]] * np.array([0, 200, 0])
+        scents_arr += scents[:,:,[SCENT_TO_FOOD]] * np.array([0, 0, 200])
 
         surface = pg.surfarray.make_surface(scents_arr)
 
@@ -302,7 +306,7 @@ def main() -> None:
         world.add_component(ant, Movable(home_pos, Vector2(1, 0).rotate(randint(0, 360))))
         world.add_component(ant, Renderable(3, pg.Color(200, 0, 0)))
 
-    scent_processor = ScentProcessor(WORLD_SIZE)
+    scent_processor = ScentProcessor(WORLD_SIZE, 2)
     food_processor = FoodProcessor(WORLD_SIZE)
     ant_processor = AntProcessor(food_processor, scent_processor)
     movement_processor = MovementProcessor(WORLD_SIZE)
